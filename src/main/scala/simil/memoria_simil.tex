@@ -1,0 +1,212 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[catalan]{babel}
+\usepackage[margin=1.2cm]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{titlesec}
+
+\pagestyle{empty}
+\setlength{\columnsep}{0.6cm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\titleformat{\section}{\normalsize\bfseries}{}{0pt}{}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+
+\lstdefinestyle{scalastyle}{
+  language=Scala,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue!70!black}\bfseries,
+  commentstyle=\color{green!40!black}\itshape,
+  frame=single, rulecolor=\color{gray!60},
+  breaklines=true, showstringspaces=false, tabsize=2,
+  columns=fullflexible, keepspaces=true,
+  aboveskip=2pt, belowskip=2pt,
+  literate=
+    {à}{{\`a}}1 {è}{{\`e}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ò}{{\`o}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+    {ï}{{\"i}}1 {ü}{{\"u}}1 {ç}{{\c c}}1 {À}{{\`A}}1 {È}{{\`E}}1 {É}{{\'E}}1
+}
+\lstdefinestyle{outputstyle}{
+  basicstyle=\ttfamily\tiny,
+  frame=single, rulecolor=\color{gray!60}, backgroundcolor=\color{gray!8},
+  breaklines=true, columns=fullflexible, keepspaces=true,
+  aboveskip=2pt, belowskip=2pt,
+  literate=
+    {à}{{\`a}}1 {è}{{\`e}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ò}{{\`o}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+    {ï}{{\"i}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+}
+
+\begin{document}
+
+\textbf{\large Similitud entre documents (Part I)} --- Sergi Mercader 1933607
+
+% ------------------------------------------------------------------
+\section*{1. Freqüències de paraules i stop-words}
+\begin{lstlisting}[style=scalastyle]
+object Simil {
+  // Stop-words, llegides del fitxer
+  val stopwords = Using.resource(
+      Source.fromFile("assets/simil/stopwords/english-stop.txt")) { s =>
+    s.getLines().map(_.trim.toLowerCase).filter(_.nonEmpty).toList
+  }
+
+  // Minúscules, només lletres, separat en paraules
+  private def normalitza(text: String): List[String] =
+    text.toLowerCase.map(c => if (c.isLetter) c else ' ')
+      .split("\\s+").filter(_.nonEmpty).toList
+
+  // groupBy agrupa paraules iguals; la mida del grup és la freqüència
+  def freq(text: String): List[(String, Int)] =
+    normalitza(text).groupBy(identity)
+      .map((p, grup) => (p, grup.length)).toList
+
+  // Com freq, descartant les stop-words (Set per cercar ràpid)
+  def nonstopfreq(text: String, stopwords: List[String])
+      : List[(String, Int)] = {
+    val excloses = stopwords.iterator.map(_.toLowerCase).toSet
+    freq(text).filterNot((p, _) => excloses.contains(p))
+  }
+\end{lstlisting}
+\begin{lstlisting}[style=outputstyle]
+Num de Paraules: 30419 Diferents: 3007
+the 1818 5,98 | and 940 3,09 | to 809 2,66
+a 690 2,27 | of 631 2,07 | it 610 2,01 ...
+-- sense stop-words --
+Num de Paraules: 10038 Diferents: 2623
+alice 403 4,01 | gutenberg 93 0,93
+project 87 0,87 | queen 75 0,75 ...
+\end{lstlisting}
+
+% ------------------------------------------------------------------
+\section*{2. Distribució de paraules}
+\begin{lstlisting}[style=scalastyle]
+  def paraulafreqfreq(text: String): Unit = {
+    // (freqüència, nombre de paraules amb aquesta freqüència)
+    val res = freq(text).groupBy((_, f) => f)
+      .map((f, grup) => (f, grup.length)).toList
+    val ord = res.sortBy(_._2)
+    println("Les 10 frequencies mes frequents:")
+    ord.reverse.take(10).foreach((f, q) =>
+      println(s"$q paraules apareixen $f vegades"))
+    println("Les 5 frequencies menys frequents:")
+    ord.take(5).foreach((f, q) =>
+      println(s"$q paraules apareixen $f vegades"))
+  }
+\end{lstlisting}
+\begin{lstlisting}[style=outputstyle]
+1330 paraules apareixen 1 vegades
+468 paraules apareixen 2 vegades
+264 paraules apareixen 3 vegades
+176 paraules apareixen 4 vegades
+101 paraules apareixen 5 vegades
+74 paraules apareixen 8 vegades ...
+(menys freqüents: 1 paraula amb 96, 809, 101,
+ 1818 i 481 aparicions)
+\end{lstlisting}
+
+% ------------------------------------------------------------------
+\section*{3. Ngrames}
+\begin{lstlisting}[style=scalastyle]
+  // Retorna TOTS els ngrames (el take(10) es fa en mostrar-los).
+  // El filter evita finestres incompletes si el text té < n paraules.
+  def ngrames(n: Int, text: String): List[(String, Int)] =
+    normalitza(text).sliding(n).filter(_.length == n)
+      .map(_.mkString(" ")).toList
+      .groupBy(identity).map((g, l) => (g, l.length)).toList
+      .sortBy((_, f) => -f)
+\end{lstlisting}
+\begin{lstlisting}[style=outputstyle]
+project gutenberg tm 57 | the mock turtle 53
+i don t 31 | the march hare 30
+said the king 29 | the project gutenberg 29
+said the hatter 21 | the white rabbit 21 ...
+\end{lstlisting}
+
+% ------------------------------------------------------------------
+\section*{4. Similitud de cosinus}
+\begin{lstlisting}[style=scalastyle]
+  // calcularFreq és una funció: per defecte paraules sense
+  // stop-words; amb ngrames(2,_) o ngrames(3,_) serveix per
+  // a digrames i trigrames sense duplicar codi.
+  def cosinesim(text1: String, text2: String,
+      calcularFreq: String => List[(String, Int)] =
+        text => nonstopfreq(text, stopwords)): Double = {
+    val freq1 = calcularFreq(text1)
+    val freq2 = calcularFreq(text2)
+    if (freq1.isEmpty || freq2.isEmpty) 0.0
+    else {
+      // _._2 = freqüència; el màxim normalitza els pesos
+      val max1 = freq1.map(_._2).max
+      val max2 = freq2.map(_._2).max
+      // Mateixes posicions per als dos vectors (alineats)
+      val paraules = (freq1.map(_._1) ++ freq2.map(_._1)).distinct
+      // Map: cerca per clau ràpida (amb find era quadràtic)
+      val m1 = freq1.toMap
+      val m2 = freq2.toMap
+      val v1 = paraules.map(p => m1.getOrElse(p, 0).toDouble / max1)
+      val v2 = paraules.map(p => m2.getOrElse(p, 0).toDouble / max2)
+      // zip aparella posició a posició: producte escalar
+      val producte = (v1 zip v2).map((a, b) => a * b).sum
+      val norma1 = math.sqrt(v1.map(x => x * x).sum)
+      val norma2 = math.sqrt(v2.map(x => x * x).sum)
+      producte / (norma1 * norma2)  // normes > 0 (llistes no buides)
+    }
+  }
+}
+\end{lstlisting}
+\begin{lstlisting}[style=outputstyle]
+Similitud pg11 - pg12: 0,876
+\end{lstlisting}
+
+% ------------------------------------------------------------------
+\section*{5. Comparació entre llibres}
+\begin{lstlisting}[style=scalastyle]
+@main def comprovacions(): Unit = {
+  def llegir(ruta: String): String =
+    Using.resource(Source.fromFile(ruta))(_.mkString)
+  val llibres = List("pg11.txt", "pg12.txt", "pg74.txt", "pg2500.txt")
+    .map(nom => nom -> llegir(s"assets/simil/documents/$nom"))
+  for (i <- llibres.indices; j <- (i + 1) until llibres.length) {
+    val (n1, t1) = llibres(i)
+    val (n2, t2) = llibres(j)
+    val par = Simil.cosinesim(t1, t2)
+    val di  = Simil.cosinesim(t1, t2, Simil.ngrames(2, _))
+    val tri = Simil.cosinesim(t1, t2, Simil.ngrames(3, _))
+    println("%-12s %-12s %9.3f %9.3f %9.3f".format(n1, n2, par, di, tri))
+  }
+  // (la resta del main mostra els apartats anteriors amb
+  //  freq, nonstopfreq, paraulafreqfreq i ngrames)
+}
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{llccc}
+\toprule
+Llibre 1 & Llibre 2 & Paraules & Digrames & Trigrames \\
+\midrule
+pg11 & pg12   & 0,876 & 0,799 & 0,381 \\
+pg11 & pg74   & 0,259 & 0,620 & 0,255 \\
+pg11 & pg2500 & 0,277 & 0,499 & 0,199 \\
+pg12 & pg74   & 0,247 & 0,665 & 0,274 \\
+pg12 & pg2500 & 0,261 & 0,515 & 0,203 \\
+pg74 & pg2500 & 0,299 & 0,675 & 0,204 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\small
+\textbf{Comentaris.} Paraules: pg11--pg12 (les dues obres d'Alice) destaquen
+(0,876) davant la resta (${\approx}$0,25--0,30), pel vocabulari i personatges
+comuns. Digrames: la similitud de la resta puja (0,50--0,67) perquè no s'han
+tret stop-words i combinacions com \emph{of the} són comunes a tots els llibres.
+Trigrames: baixa de nou, ja que les seqüències llargues són més específiques de
+cada obra, i pg11--pg12 continua sent la parella més semblant. Els digrames i
+trigrames es calculen sense eliminar stop-words (l'enunciat no ho especifica).
+Canviar \texttt{find} per \texttt{Map} a \texttt{cosinesim} va reduir molt el
+temps amb ngrames.
+
+\end{document}
